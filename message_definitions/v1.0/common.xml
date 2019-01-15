@@ -3919,18 +3919,6 @@
       <field type="uint8_t" name="mode" enum="MAV_MODE">System mode. Includes arming state.</field>
       <field type="uint64_t" name="flags" display="bitmask">Flags as bitfield, reserved for future use.</field>
     </message>
-    <message id="94" name="WRENCH_TARGET_BODY_NED">
-      <description>For overactuated vehicles. Contains wrench target (force and torque vectors in the body frame).</description>
-      <field type="uint32_t" name="time_boot_ms" units="ms">Timestamp (time since system boot).</field>
-      <field type="uint8_t" name="coordinate_frame" enum="MAV_FRAME">Valid options are: MAV_FRAME_LOCAL_NED = 1, MAV_FRAME_LOCAL_OFFSET_NED = 7, MAV_FRAME_BODY_NED = 8, MAV_FRAME_BODY_OFFSET_NED = 9</field>
-      <field type="uint16_t" name="type_mask" enum="POSITION_TARGET_TYPEMASK" display="bitmask">Bitmap to indicate which dimensions should be ignored by the vehicle.</field>
-      <field type="float" name="Fx" units="N">X force in NED frame</field>
-      <field type="float" name="Fy" units="N">Y force in NED frame</field>
-      <field type="float" name="Fz" units="N">Z force in NED frame</field>
-      <field type="float" name="Mx" units="Nm">X torque in NED frame</field>
-      <field type="float" name="My" units="Nm">Y torque in NED frame</field>
-      <field type="float" name="Mz" units="Nm">Z torque in NED frame</field>
-    </message>
     <message id="100" name="OPTICAL_FLOW">
       <description>Optical flow from a flow sensor (e.g. optical mouse sensor)</description>
       <field type="uint64_t" name="time_usec" units="us">Timestamp (UNIX Epoch time or time since system boot). The receiving end can infer timestamp format (since 1.1.1970 or since system boot) by checking for the magnitude the number.</field>
