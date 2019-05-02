@@ -1,0 +1,6 @@
+[submodule "include/mavlink/v1.0/c_library_v1"]
+	path = include/mavlink/v1.0/c_library_v1
+	url = git@github.com:ethz-asl/c_library_v1.git
+[submodule "include/mavlink/v2.0/c_library_v2"]
+	path = include/mavlink/v2.0/c_library_v2
+	url = git@github.com:ethz-asl/c_library_v2.git
