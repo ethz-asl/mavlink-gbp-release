@@ -117,6 +117,7 @@ class mavfile_state(object):
         self.vehicle_type = "UNKNOWN"
         self.mav_type = mavlink.MAV_TYPE_FIXED_WING
         self.base_mode = 0
+        self.armed = False # canonical arm state for the vehicle as a whole
 
         if float(mavlink.WIRE_PROTOCOL_VERSION) >= 1:
             self.messages['HOME'] = mavlink.MAVLink_gps_raw_int_message(0,0,0,0,0,0,0,0,0,0)
@@ -195,7 +196,7 @@ class mavfile(object):
         if value != self.param_sysid[1]:
             self.param_sysid = (self.param_sysid[0], value)
             if not self.param_sysid in self.param_state:
-                self.param_state[self.param_state] = param_state()
+                self.param_state[self.param_sysid] = param_state()
 
     @property
     def params(self):
@@ -314,6 +315,7 @@ class mavfile(object):
             return False
         if msg.type in (mavlink.MAV_TYPE_GCS,
                         mavlink.MAV_TYPE_GIMBAL,
+                        mavlink.MAV_TYPE_ADSB,
                         mavlink.MAV_TYPE_ONBOARD_CONTROLLER):
             return False
         return True
@@ -349,6 +351,11 @@ class mavfile(object):
 
         self.sysid_state[src_system].messages[type] = msg
 
+        if src_tuple == radio_tuple:
+            # as a special case radio msgs are added for all sysids
+            for s in self.sysid_state.keys():
+                self.sysid_state[s].messages[type] = msg
+
         if not (src_tuple == radio_tuple or msg.get_type() == 'BAD_DATA'):
             if not src_tuple in self.last_seq:
                 last_seq = -1
@@ -359,7 +366,7 @@ class mavfile(object):
             if seq != seq2 and last_seq != -1:
                 diff = (seq2 - seq) % 256
                 self.mav_loss += diff
-                #print("lost %u seq=%u seq2=%u last_seq=%u src_system=%u %s" % (diff, seq, seq2, last_seq, src_system, msg.get_type()))
+                #print("lost %u seq=%u seq2=%u last_seq=%u src_tupe=%s %s" % (diff, seq, seq2, last_seq, str(src_tuple), msg.get_type()))
             self.last_seq[src_tuple] = seq2
             self.mav_count += 1
         
@@ -372,6 +379,8 @@ class mavfile(object):
                 self.flightmode = mode_string_v10(msg)
                 self.mav_type = msg.type
                 self.base_mode = msg.base_mode
+                self.sysid_state[self.sysid].armed = (msg.base_mode & mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+
         elif type == 'PARAM_VALUE':
             if not src_tuple in self.param_state:
                 self.param_state[src_tuple] = param_state()
@@ -606,6 +615,7 @@ class mavfile(object):
                         mavlink.MAV_TYPE_HELICOPTER,
                         mavlink.MAV_TYPE_HEXAROTOR,
                         mavlink.MAV_TYPE_OCTOROTOR,
+                        mavlink.MAV_TYPE_DODECAROTOR,
                         mavlink.MAV_TYPE_COAXIAL,
                         mavlink.MAV_TYPE_TRICOPTER]:
             map = mode_mapping_acm
@@ -812,10 +822,7 @@ class mavfile(object):
 
     def motors_armed(self):
         '''return true if motors armed'''
-        if not 'HEARTBEAT' in self.messages:
-            return False
-        m = self.messages['HEARTBEAT']
-        return (m.base_mode & mavlink.MAV_MODE_FLAG_SAFETY_ARMED) != 0
+        return self.sysid_state[self.sysid].armed
 
     def motors_armed_wait(self):
         '''wait for motors to be armed'''
@@ -1158,12 +1165,14 @@ class mavtcp(mavfile):
 
         self.autoreconnect = autoreconnect
 
-        self.do_connect(retries)
+        self.retries = retries
+        self.do_connect()
 
         mavfile.__init__(self, self.port.fileno(), "tcp:" + device, source_system=source_system, source_component=source_component, use_native=use_native)
 
-    def do_connect(self, retries=3):
+    def do_connect(self):
         self.port = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        retries = self.retries
         if retries <= 0:
             # try to connect at least once:
             retries = 1
@@ -1184,7 +1193,19 @@ class mavtcp(mavfile):
     def close(self):
         self.port.close()
 
+    def handle_eof(self):
+        # EOF
+        print("EOF on TCP socket")
+        if self.autoreconnect:
+            print("Attempting reconnect")
+            if self.port is not None:
+                self.port.close()
+                self.port = None
+            self.do_connect()
+
     def recv(self,n=None):
+        if self.port is None:
+            self.handle_eof()
         if n is None:
             n = self.mav.bytes_needed()
         try:
@@ -1194,16 +1215,13 @@ class mavtcp(mavfile):
                 return ""
             raise
         if len(data) == 0:
-            # EOF
-            print("EOF on TCP socket")
-            if self.autoreconnect:
-                print("Attempting reconnect")
-                self.port.close()
-                self.do_connect()
+            self.handle_eof()
 
         return data
 
     def write(self, buf):
+        if self.port is None:
+            self.do_connect()
         try:
             self.port.send(buf)
         except socket.error:
@@ -1219,8 +1237,8 @@ class mavtcpin(mavfile):
             sys.exit(1)
         self.listen = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.listen_addr = (a[0], int(a[1]))
-        self.listen.bind(self.listen_addr)
         self.listen.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.listen.bind(self.listen_addr)
         self.listen.listen(1)
         self.listen.setblocking(0)
         set_close_on_exec(self.listen.fileno())
@@ -1428,6 +1446,10 @@ class mavmmaplog(mavlogfile):
                 incompat_flags = u_ord(self.data_map[ofs+10])
                 if incompat_flags & mavlink.MAVLINK_IFLAG_SIGNED:
                     mlen += mavlink.MAVLINK_SIGNATURE_BLOCK_LEN
+            else:
+                # unrecognised marker; probably a malformed log
+                ofs += 1
+                continue
 
             if not mtype in self.offsets:
                 if not mtype in mavlink.mavlink_map:
@@ -1484,7 +1506,7 @@ class mavmmaplog(mavlogfile):
             self.offset = smallest_offset
             self.f.seek(smallest_offset)
 
-    def recv_match(self, condition=None, type=None, blocking=False):
+    def recv_match(self, condition=None, type=None, blocking=False, timeout=None):
         '''recv the next message that matches the given condition
         type can be a string or a list of strings'''
         if type is not None:
@@ -1497,6 +1519,14 @@ class mavmmaplog(mavlogfile):
                 self.skip_to_type(type)
             m = self.recv_msg()
             if m is None:
+                if blocking:
+                    for hook in self.idle_hooks:
+                        hook(self)
+                    if timeout is None:
+                        self.select(0.05)
+                    else:
+                        self.select(timeout/2)
+                    continue
                 return None
             if type is not None and not m.get_type() in type:
                 continue
@@ -1681,7 +1711,7 @@ def is_printable(c):
 def all_printable(buf):
     '''see if a string is all printable'''
     for c in buf:
-        if not is_printable(c) and not c in ['\r', '\n', '\t']:
+        if not is_printable(c) and not c in ['\r', '\n', '\t'] and not c in [ord('\r'), ord('\n'), ord('\t')]:
             return False
     return True
 
@@ -1948,7 +1978,8 @@ px4_map = { "MANUAL":        (mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED | mavlin
             "LAND":          (mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED | auto_mode_flags,                                                                        PX4_CUSTOM_MAIN_MODE_AUTO,        PX4_CUSTOM_SUB_MODE_AUTO_LAND           ),
             "RTGS":          (mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED | auto_mode_flags,                                                                        PX4_CUSTOM_MAIN_MODE_AUTO,        PX4_CUSTOM_SUB_MODE_AUTO_RTGS           ),
             "FOLLOWME":      (mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED | auto_mode_flags,                                                                        PX4_CUSTOM_MAIN_MODE_AUTO,        PX4_CUSTOM_SUB_MODE_AUTO_FOLLOW_TARGET  ),
-            "OFFBOARD":      (mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED | auto_mode_flags,                                                                        PX4_CUSTOM_MAIN_MODE_OFFBOARD,    0                                       )}
+            "OFFBOARD":      (mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED | auto_mode_flags,                                                                        PX4_CUSTOM_MAIN_MODE_OFFBOARD,    0                                       ),
+            "TAKEOFF":       (mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED | auto_mode_flags,                                                                        PX4_CUSTOM_MAIN_MODE_AUTO,        PX4_CUSTOM_SUB_MODE_AUTO_TAKEOFF        )}
 
 
 def interpret_px4_mode(base_mode, custom_mode):
@@ -2020,6 +2051,7 @@ def mode_mapping_bynumber(mav_type):
                     mavlink.MAV_TYPE_HELICOPTER,
                     mavlink.MAV_TYPE_HEXAROTOR,
                     mavlink.MAV_TYPE_OCTOROTOR,
+                    mavlink.MAV_TYPE_DODECAROTOR,
                     mavlink.MAV_TYPE_COAXIAL,
                     mavlink.MAV_TYPE_TRICOPTER]:
         map = mode_mapping_acm

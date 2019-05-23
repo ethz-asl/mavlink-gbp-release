@@ -13,7 +13,7 @@ except LookupError:
 from setuptools import setup, Extension
 import glob, os, shutil, fnmatch, platform, sys
 
-version = '2.3.3'
+version = '2.3.5'
 
 
 def generate_content():
@@ -103,7 +103,7 @@ setup (name = 'pymavlink',
                            'creation of simple scripts to analyse telemetry logs from autopilots such as ArduPilot which use '
                            'the MAVLink protocol. See the scripts that come with the package for examples of small, useful '
                            'scripts that use pymavlink. For more information about the MAVLink protocol see '
-                           'http://qgroundcontrol.org/mavlink/'),
+                           'https://mavlink.io/en/'),
        url = 'https://github.com/ArduPilot/pymavlink/',
        classifiers=['Development Status :: 4 - Beta',
                     'Environment :: Console',
